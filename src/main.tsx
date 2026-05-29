@@ -137,7 +137,7 @@ function App() {
   const [appMessage, setAppMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isSupabaseConfigured) {
+    if (!supabase) {
       setAppMessage("Supabase Publishable key를 .env.local과 Netlify 환경변수에 설정하면 실제 데이터가 연결됩니다.");
       return;
     }
@@ -157,7 +157,7 @@ function App() {
 
   useEffect(() => {
     async function loadArtworks() {
-      if (!isSupabaseConfigured) {
+      if (!supabase) {
         return;
       }
 
@@ -182,7 +182,7 @@ function App() {
 
   useEffect(() => {
     async function loadFavorites() {
-      if (!isSupabaseConfigured || !user) {
+      if (!supabase || !user) {
         setFavoriteIds(new Set());
         return;
       }
@@ -208,7 +208,7 @@ function App() {
   };
 
   async function handleSignOut() {
-    if (isSupabaseConfigured) {
+    if (supabase) {
       await supabase.auth.signOut();
     }
     setUser(null);
@@ -221,7 +221,7 @@ function App() {
       return;
     }
 
-    if (!isSupabaseConfigured) {
+    if (!supabase) {
       setAppMessage("Supabase 키 설정 후 찜 기능을 사용할 수 있습니다.");
       return;
     }
@@ -658,7 +658,7 @@ function LoginForm({ onAuthSuccess }: AuthFormProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!isSupabaseConfigured) {
+    if (!supabase) {
       setMessage("Supabase Publishable key를 먼저 설정해주세요.");
       return;
     }
@@ -716,7 +716,7 @@ function SignupForm({ onAuthSuccess }: AuthFormProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!isSupabaseConfigured) {
+    if (!supabase) {
       setMessage("Supabase Publishable key를 먼저 설정해주세요.");
       return;
     }
