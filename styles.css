@@ -109,6 +109,17 @@ main {
   min-height: calc(100vh - 176px);
 }
 
+.app-message {
+  max-width: 1180px;
+  margin: 18px auto 0;
+  border: 1px solid #d7e4ef;
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: var(--blue);
+  background: #eef6fb;
+  font-weight: 700;
+}
+
 .page {
   display: none;
   padding: clamp(28px, 5vw, 72px) clamp(18px, 4vw, 56px);
@@ -336,6 +347,33 @@ select {
   object-fit: cover;
 }
 
+.art-image-wrap {
+  position: relative;
+}
+
+.favorite-button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 8px 20px rgba(32, 33, 36, 0.16);
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.favorite-button.active {
+  color: #fff;
+  background: var(--coral);
+}
+
 .art-info {
   display: grid;
   gap: 6px;
@@ -467,6 +505,20 @@ details p {
 
 .auth-form h2 {
   font-size: 1.8rem;
+}
+
+.form-message {
+  margin: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--blue);
+  background: #eef6fb;
+  line-height: 1.5;
+}
+
+.primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .empty-state {

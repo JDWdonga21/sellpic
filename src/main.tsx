@@ -1,20 +1,50 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 import { createRoot } from "react-dom/client";
+import { isSupabaseConfigured, supabase } from "./lib/supabase";
 import "../styles.css";
 
 type PageName = "home" | "market" | "help";
 type AuthMode = "login" | "signup";
-type Category = "회화" | "사진" | "판화" | "조각";
+type Category = "회화" | "사진" | "판화" | "조각" | "디지털" | "기타";
 type PriceRange = "전체 가격" | "30만원 이하" | "30만원 - 70만원" | "70만원 이상";
 
 type Artwork = {
-  id: number;
+  id: string;
+  sellerId: string | null;
   title: string;
   artist: string;
   price: number;
   category: Category;
   image: string;
   alt: string;
+  description?: string | null;
+  status?: string;
+};
+
+type ArtworkRow = {
+  id: string;
+  seller_id: string | null;
+  title: string;
+  description: string | null;
+  category: Category;
+  price: number;
+  image_url: string | null;
+  status: string;
+  profiles?:
+    | {
+        display_name: string | null;
+        username: string | null;
+      }
+    | Array<{
+        display_name: string | null;
+        username: string | null;
+      }>
+    | null;
+};
+
+type FavoriteRow = {
+  artwork_id: string;
 };
 
 type HelpItem = {
@@ -25,42 +55,50 @@ type HelpItem = {
 type NavigationHandler = (page: PageName) => void;
 type AuthHandler = (mode?: AuthMode) => void;
 
-const artworks: Artwork[] = [
+const fallbackArtworks: Artwork[] = [
   {
-    id: 1,
+    id: "sample-rhythm",
+    sellerId: null,
     title: "Rhythm Field",
     artist: "Kim Yuna",
     price: 480000,
     category: "회화",
     image: "/assets/painting-rhythm.svg",
     alt: "붉은색과 청록색 추상 회화",
+    status: "available",
   },
   {
-    id: 2,
+    id: "sample-garden",
+    sellerId: null,
     title: "Quiet Garden",
     artist: "Lee Haneul",
     price: 320000,
     category: "판화",
     image: "/assets/painting-garden.svg",
     alt: "녹색 정원 풍경 회화",
+    status: "available",
   },
   {
-    id: 3,
+    id: "sample-night",
+    sellerId: null,
     title: "Blue Hour",
     artist: "Park Minseo",
     price: 260000,
     category: "사진",
     image: "/assets/painting-night.svg",
     alt: "어두운 도시 풍경 작품",
+    status: "available",
   },
   {
-    id: 4,
+    id: "sample-stone",
+    sellerId: null,
     title: "Stone Memory",
     artist: "Choi Aram",
     price: 720000,
     category: "조각",
     image: "/assets/painting-stone.svg",
     alt: "돌 형태의 조각 작품",
+    status: "available",
   },
 ];
 
@@ -79,7 +117,7 @@ const helpItems: HelpItem[] = [
   },
 ];
 
-const categoryOptions: Array<"전체" | Category> = ["전체", "회화", "사진", "판화", "조각"];
+const categoryOptions: Array<"전체" | Category> = ["전체", "회화", "사진", "판화", "조각", "디지털", "기타"];
 const priceOptions: PriceRange[] = ["전체 가격", "30만원 이하", "30만원 - 70만원", "70만원 이상"];
 
 const currency = new Intl.NumberFormat("ko-KR", {
@@ -92,6 +130,72 @@ function App() {
   const [activePage, setActivePage] = useState<PageName>("home");
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [artworks, setArtworks] = useState<Artwork[]>(fallbackArtworks);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [isLoadingArtworks, setIsLoadingArtworks] = useState(false);
+  const [appMessage, setAppMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setAppMessage("Supabase Publishable key를 .env.local과 Netlify 환경변수에 설정하면 실제 데이터가 연결됩니다.");
+      return;
+    }
+
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    async function loadArtworks() {
+      if (!isSupabaseConfigured) {
+        return;
+      }
+
+      setIsLoadingArtworks(true);
+      const { data, error } = await supabase
+        .from("artworks")
+        .select("id,seller_id,title,description,category,price,image_url,status,profiles(display_name,username)")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        setAppMessage(`작품 목록을 불러오지 못했습니다: ${error.message}`);
+      } else if (data && data.length > 0) {
+        setArtworks(data.map(mapArtworkRow));
+        setAppMessage(null);
+      }
+
+      setIsLoadingArtworks(false);
+    }
+
+    loadArtworks();
+  }, []);
+
+  useEffect(() => {
+    async function loadFavorites() {
+      if (!isSupabaseConfigured || !user) {
+        setFavoriteIds(new Set());
+        return;
+      }
+
+      const { data, error } = await supabase.from("favorites").select("artwork_id").eq("user_id", user.id);
+
+      if (!error && data) {
+        setFavoriteIds(new Set((data as FavoriteRow[]).map((favorite) => favorite.artwork_id)));
+      }
+    }
+
+    loadFavorites();
+  }, [user]);
 
   const navigate: NavigationHandler = (page) => {
     setActivePage(page);
@@ -103,12 +207,77 @@ function App() {
     setIsAuthOpen(true);
   };
 
+  async function handleSignOut() {
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
+    setUser(null);
+    setFavoriteIds(new Set());
+  }
+
+  async function toggleFavorite(artworkId: string) {
+    if (!user) {
+      openAuth("login");
+      return;
+    }
+
+    if (!isSupabaseConfigured) {
+      setAppMessage("Supabase 키 설정 후 찜 기능을 사용할 수 있습니다.");
+      return;
+    }
+
+    const nextFavoriteIds = new Set(favoriteIds);
+
+    if (nextFavoriteIds.has(artworkId)) {
+      nextFavoriteIds.delete(artworkId);
+      setFavoriteIds(nextFavoriteIds);
+      const { error } = await supabase
+        .from("favorites")
+        .delete()
+        .eq("user_id", user.id)
+        .eq("artwork_id", artworkId);
+
+      if (error) {
+        setAppMessage(`찜을 해제하지 못했습니다: ${error.message}`);
+      }
+      return;
+    }
+
+    nextFavoriteIds.add(artworkId);
+    setFavoriteIds(nextFavoriteIds);
+    const { error } = await supabase.from("favorites").insert({
+      user_id: user.id,
+      artwork_id: artworkId,
+    });
+
+    if (error) {
+      nextFavoriteIds.delete(artworkId);
+      setFavoriteIds(new Set(nextFavoriteIds));
+      setAppMessage(`찜을 저장하지 못했습니다: ${error.message}`);
+    }
+  }
+
   return (
     <>
-      <Header activePage={activePage} onNavigate={navigate} onOpenAuth={openAuth} />
+      <Header
+        activePage={activePage}
+        user={user}
+        onNavigate={navigate}
+        onOpenAuth={openAuth}
+        onSignOut={handleSignOut}
+      />
       <main>
-        {activePage === "home" && <HomePage onNavigate={navigate} onOpenAuth={openAuth} />}
-        {activePage === "market" && <MarketPage artworks={artworks} onOpenAuth={openAuth} />}
+        {appMessage && <div className="app-message">{appMessage}</div>}
+        {activePage === "home" && <HomePage artworks={artworks} onNavigate={navigate} onOpenAuth={openAuth} />}
+        {activePage === "market" && (
+          <MarketPage
+            artworks={artworks}
+            favoriteIds={favoriteIds}
+            isLoading={isLoadingArtworks}
+            onOpenAuth={openAuth}
+            onToggleFavorite={toggleFavorite}
+          />
+        )}
         {activePage === "help" && <HelpPage />}
       </main>
       <Footer />
@@ -117,19 +286,39 @@ function App() {
           mode={authMode}
           onModeChange={setAuthMode}
           onClose={() => setIsAuthOpen(false)}
+          onAuthSuccess={() => setIsAuthOpen(false)}
         />
       )}
     </>
   );
 }
 
+function mapArtworkRow(row: ArtworkRow): Artwork {
+  const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
+
+  return {
+    id: row.id,
+    sellerId: row.seller_id,
+    title: row.title,
+    artist: profile?.display_name || profile?.username || "Unknown Artist",
+    price: row.price,
+    category: row.category,
+    image: row.image_url || "/assets/painting-rhythm.svg",
+    alt: `${row.title} 작품 이미지`,
+    description: row.description,
+    status: row.status,
+  };
+}
+
 type HeaderProps = {
   activePage: PageName;
+  user: User | null;
   onNavigate: NavigationHandler;
   onOpenAuth: AuthHandler;
+  onSignOut: () => void;
 };
 
-function Header({ activePage, onNavigate, onOpenAuth }: HeaderProps) {
+function Header({ activePage, user, onNavigate, onOpenAuth, onSignOut }: HeaderProps) {
   const navItems: Array<{ page: PageName; label: string }> = [
     { page: "home", label: "홈" },
     { page: "market", label: "장터" },
@@ -154,21 +343,28 @@ function Header({ activePage, onNavigate, onOpenAuth }: HeaderProps) {
             {item.label}
           </button>
         ))}
-        <button className="nav-link nav-login" type="button" onClick={() => onOpenAuth("login")}>
-          로그인
-        </button>
+        {user ? (
+          <button className="nav-link nav-login" type="button" onClick={onSignOut}>
+            로그아웃
+          </button>
+        ) : (
+          <button className="nav-link nav-login" type="button" onClick={() => onOpenAuth("login")}>
+            로그인
+          </button>
+        )}
       </nav>
     </header>
   );
 }
 
 type HomePageProps = {
+  artworks: Artwork[];
   onNavigate: NavigationHandler;
   onOpenAuth: AuthHandler;
 };
 
-function HomePage({ onNavigate, onOpenAuth }: HomePageProps) {
-  const [main, side] = artworks;
+function HomePage({ artworks, onNavigate, onOpenAuth }: HomePageProps) {
+  const [main, side] = artworks.length >= 2 ? artworks : fallbackArtworks;
 
   return (
     <section className="page active" aria-labelledby="home-title">
@@ -197,7 +393,7 @@ function HomePage({ onNavigate, onOpenAuth }: HomePageProps) {
 
       <section className="home-band" aria-label="서비스 요약">
         <div>
-          <strong>1,280+</strong>
+          <strong>{artworks.length.toLocaleString("ko-KR")}+</strong>
           <span>등록 작품</span>
         </div>
         <div>
@@ -234,16 +430,19 @@ function FeaturedArtwork({ artwork, className }: FeaturedArtworkProps) {
 
 type MarketPageProps = {
   artworks: Artwork[];
+  favoriteIds: Set<string>;
+  isLoading: boolean;
   onOpenAuth: AuthHandler;
+  onToggleFavorite: (artworkId: string) => void;
 };
 
-function MarketPage({ artworks: items, onOpenAuth }: MarketPageProps) {
+function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavorite }: MarketPageProps) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"전체" | Category>("전체");
   const [priceRange, setPriceRange] = useState<PriceRange>("전체 가격");
 
   const filteredArtworks = useMemo(() => {
-    return items.filter((artwork) => {
+    return artworks.filter((artwork) => {
       const lowerQuery = query.trim().toLowerCase();
       const matchesQuery =
         !lowerQuery ||
@@ -258,7 +457,7 @@ function MarketPage({ artworks: items, onOpenAuth }: MarketPageProps) {
 
       return matchesQuery && matchesCategory && matchesPrice;
     });
-  }, [category, items, priceRange, query]);
+  }, [artworks, category, priceRange, query]);
 
   return (
     <section className="page active" aria-labelledby="market-title">
@@ -307,10 +506,17 @@ function MarketPage({ artworks: items, onOpenAuth }: MarketPageProps) {
         </aside>
 
         <div className="art-grid">
-          {filteredArtworks.map((artwork) => (
-            <ArtworkCard artwork={artwork} key={artwork.id} />
-          ))}
-          {filteredArtworks.length === 0 && (
+          {isLoading && <p className="empty-state">작품을 불러오는 중입니다.</p>}
+          {!isLoading &&
+            filteredArtworks.map((artwork) => (
+              <ArtworkCard
+                artwork={artwork}
+                isFavorite={favoriteIds.has(artwork.id)}
+                key={artwork.id}
+                onToggleFavorite={onToggleFavorite}
+              />
+            ))}
+          {!isLoading && filteredArtworks.length === 0 && (
             <p className="empty-state">조건에 맞는 작품이 없습니다.</p>
           )}
         </div>
@@ -321,12 +527,24 @@ function MarketPage({ artworks: items, onOpenAuth }: MarketPageProps) {
 
 type ArtworkCardProps = {
   artwork: Artwork;
+  isFavorite: boolean;
+  onToggleFavorite: (artworkId: string) => void;
 };
 
-function ArtworkCard({ artwork }: ArtworkCardProps) {
+function ArtworkCard({ artwork, isFavorite, onToggleFavorite }: ArtworkCardProps) {
   return (
     <article className="art-card">
-      <img src={artwork.image} alt={`${artwork.title} 작품 이미지`} />
+      <div className="art-image-wrap">
+        <img src={artwork.image} alt={`${artwork.title} 작품 이미지`} />
+        <button
+          className={`favorite-button ${isFavorite ? "active" : ""}`}
+          type="button"
+          onClick={() => onToggleFavorite(artwork.id)}
+          aria-label={isFavorite ? "찜 해제" : "찜하기"}
+        >
+          {isFavorite ? "♥" : "♡"}
+        </button>
+      </div>
       <div className="art-info">
         <span className="tag">{artwork.category}</span>
         <h3>{artwork.title}</h3>
@@ -378,9 +596,10 @@ type AuthModalProps = {
   mode: AuthMode;
   onModeChange: React.Dispatch<React.SetStateAction<AuthMode>>;
   onClose: () => void;
+  onAuthSuccess: () => void;
 };
 
-function AuthModal({ mode, onModeChange, onClose }: AuthModalProps) {
+function AuthModal({ mode, onModeChange, onClose, onAuthSuccess }: AuthModalProps) {
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -416,49 +635,159 @@ function AuthModal({ mode, onModeChange, onClose }: AuthModalProps) {
           </button>
         </div>
 
-        {mode === "login" ? <LoginForm /> : <SignupForm />}
+        {mode === "login" ? (
+          <LoginForm onAuthSuccess={onAuthSuccess} />
+        ) : (
+          <SignupForm onAuthSuccess={onAuthSuccess} />
+        )}
       </section>
     </div>
   );
 }
 
-function LoginForm() {
+type AuthFormProps = {
+  onAuthSuccess: () => void;
+};
+
+function LoginForm({ onAuthSuccess }: AuthFormProps) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!isSupabaseConfigured) {
+      setMessage("Supabase Publishable key를 먼저 설정해주세요.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setIsSubmitting(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    onAuthSuccess();
+  }
+
   return (
-    <form className="auth-form active">
+    <form className="auth-form active" onSubmit={handleSubmit}>
       <h2 id="auth-title">로그인</h2>
       <label>
         이메일
-        <input type="email" placeholder="you@example.com" />
+        <input
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          required
+        />
       </label>
       <label>
         비밀번호
-        <input type="password" placeholder="비밀번호" />
+        <input
+          type="password"
+          placeholder="비밀번호"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+        />
       </label>
-      <button className="primary-action full" type="button">
-        로그인
+      {message && <p className="form-message">{message}</p>}
+      <button className="primary-action full" type="submit" disabled={isSubmitting}>
+        {isSubmitting ? "로그인 중" : "로그인"}
       </button>
     </form>
   );
 }
 
-function SignupForm() {
+function SignupForm({ onAuthSuccess }: AuthFormProps) {
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!isSupabaseConfigured) {
+      setMessage("Supabase Publishable key를 먼저 설정해주세요.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          display_name: displayName,
+        },
+      },
+    });
+
+    if (error) {
+      setIsSubmitting(false);
+      setMessage(error.message);
+      return;
+    }
+
+    if (data.user) {
+      await supabase.from("profiles").upsert({
+        id: data.user.id,
+        display_name: displayName,
+        role: "artist",
+      });
+    }
+
+    setIsSubmitting(false);
+    setMessage("가입 확인 메일을 확인해주세요.");
+    onAuthSuccess();
+  }
+
   return (
-    <form className="auth-form active">
+    <form className="auth-form active" onSubmit={handleSubmit}>
       <h2 id="auth-title">가입</h2>
       <label>
         이름
-        <input type="text" placeholder="홍길동" />
+        <input
+          type="text"
+          placeholder="홍길동"
+          value={displayName}
+          onChange={(event) => setDisplayName(event.target.value)}
+          required
+        />
       </label>
       <label>
         이메일
-        <input type="email" placeholder="you@example.com" />
+        <input
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          required
+        />
       </label>
       <label>
         비밀번호
-        <input type="password" placeholder="8자 이상" />
+        <input
+          type="password"
+          placeholder="8자 이상"
+          minLength={8}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+        />
       </label>
-      <button className="primary-action full" type="button">
-        가입하기
+      {message && <p className="form-message">{message}</p>}
+      <button className="primary-action full" type="submit" disabled={isSubmitting}>
+        {isSubmitting ? "가입 중" : "가입하기"}
       </button>
     </form>
   );
