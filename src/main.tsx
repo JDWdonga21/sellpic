@@ -473,7 +473,7 @@ type HomePageProps = {
 };
 
 function HomePage({ artworks, onNavigate, onOpenAuth }: HomePageProps) {
-  const displayArtworks = artworks.length >= 2 ? artworks : fallbackArtworks;
+  const displayArtworks = [...artworks, ...fallbackArtworks].slice(0, 2);
   const [main, side] = displayArtworks;
 
   return (
@@ -503,7 +503,7 @@ function HomePage({ artworks, onNavigate, onOpenAuth }: HomePageProps) {
 
       <section className="home-band" aria-label="서비스 요약">
         <div>
-          <strong>{Math.max(artworks.length, fallbackArtworks.length).toLocaleString("ko-KR")}+</strong>
+          <strong>{artworks.length.toLocaleString("ko-KR")}+</strong>
           <span>등록 작품</span>
         </div>
         <div>
