@@ -1,13 +1,14 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { createRoot } from "react-dom/client";
-import { isSupabaseConfigured, supabase } from "./lib/supabase";
+import { supabase } from "./lib/supabase";
 import "../styles.css";
 
 type PageName = "home" | "market" | "help";
 type AuthMode = "login" | "signup";
 type Category = "회화" | "사진" | "판화" | "조각" | "디지털" | "기타";
 type PriceRange = "전체 가격" | "30만원 이하" | "30만원 - 70만원" | "70만원 이상";
+type MarketView = "all" | "favorites" | "mine";
 
 type Artwork = {
   id: string;
@@ -41,6 +42,14 @@ type ArtworkRow = {
         username: string | null;
       }>
     | null;
+};
+
+type ArtworkFormValues = {
+  title: string;
+  description: string;
+  category: Category;
+  price: number;
+  imageFile: File | null;
 };
 
 type FavoriteRow = {
@@ -117,7 +126,8 @@ const helpItems: HelpItem[] = [
   },
 ];
 
-const categoryOptions: Array<"전체" | Category> = ["전체", "회화", "사진", "판화", "조각", "디지털", "기타"];
+const categoryOptions: Category[] = ["회화", "사진", "판화", "조각", "디지털", "기타"];
+const filterCategoryOptions: Array<"전체" | Category> = ["전체", ...categoryOptions];
 const priceOptions: PriceRange[] = ["전체 가격", "30만원 이하", "30만원 - 70만원", "70만원 이상"];
 
 const currency = new Intl.NumberFormat("ko-KR", {
@@ -130,6 +140,7 @@ function App() {
   const [activePage, setActivePage] = useState<PageName>("home");
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isArtworkModalOpen, setIsArtworkModalOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [artworks, setArtworks] = useState<Artwork[]>(fallbackArtworks);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
@@ -156,27 +167,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    async function loadArtworks() {
-      if (!supabase) {
-        return;
-      }
-
-      setIsLoadingArtworks(true);
-      const { data, error } = await supabase
-        .from("artworks")
-        .select("id,seller_id,title,description,category,price,image_url,status,profiles(display_name,username)")
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        setAppMessage(`작품 목록을 불러오지 못했습니다: ${error.message}`);
-      } else if (data && data.length > 0) {
-        setArtworks(data.map(mapArtworkRow));
-        setAppMessage(null);
-      }
-
-      setIsLoadingArtworks(false);
-    }
-
     loadArtworks();
   }, []);
 
@@ -197,6 +187,29 @@ function App() {
     loadFavorites();
   }, [user]);
 
+  async function loadArtworks() {
+    if (!supabase) {
+      return;
+    }
+
+    setIsLoadingArtworks(true);
+    const { data, error } = await supabase
+      .from("artworks")
+      .select("id,seller_id,title,description,category,price,image_url,status,profiles(display_name,username)")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setAppMessage(`작품 목록을 불러오지 못했습니다: ${error.message}`);
+    } else if (data && data.length > 0) {
+      setArtworks((data as ArtworkRow[]).map(mapArtworkRow));
+      setAppMessage(null);
+    } else {
+      setArtworks([]);
+    }
+
+    setIsLoadingArtworks(false);
+  }
+
   const navigate: NavigationHandler = (page) => {
     setActivePage(page);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -207,12 +220,82 @@ function App() {
     setIsAuthOpen(true);
   };
 
+  function openArtworkModal() {
+    if (!user) {
+      openAuth("login");
+      return;
+    }
+
+    setIsArtworkModalOpen(true);
+  }
+
   async function handleSignOut() {
     if (supabase) {
       await supabase.auth.signOut();
     }
     setUser(null);
     setFavoriteIds(new Set());
+  }
+
+  async function handleCreateArtwork(values: ArtworkFormValues) {
+    if (!supabase || !user) {
+      throw new Error("로그인 후 작품을 등록할 수 있습니다.");
+    }
+
+    await ensureProfile(user);
+
+    let imageUrl = "/assets/painting-rhythm.svg";
+
+    if (values.imageFile) {
+      const safeName = values.imageFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+      const filePath = `${user.id}/${crypto.randomUUID()}-${safeName}`;
+      const { error: uploadError } = await supabase.storage
+        .from("artworks")
+        .upload(filePath, values.imageFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      const { data } = supabase.storage.from("artworks").getPublicUrl(filePath);
+      imageUrl = data.publicUrl;
+    }
+
+    const { error } = await supabase.from("artworks").insert({
+      seller_id: user.id,
+      title: values.title,
+      description: values.description || null,
+      category: values.category,
+      price: values.price,
+      image_url: imageUrl,
+      status: "available",
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    await loadArtworks();
+    setAppMessage("작품이 등록되었습니다.");
+  }
+
+  async function handleDeleteArtwork(artworkId: string) {
+    if (!supabase || !user) {
+      return;
+    }
+
+    const { error } = await supabase.from("artworks").delete().eq("id", artworkId).eq("seller_id", user.id);
+
+    if (error) {
+      setAppMessage(`작품을 삭제하지 못했습니다: ${error.message}`);
+      return;
+    }
+
+    setArtworks((current) => current.filter((artwork) => artwork.id !== artworkId));
+    setAppMessage("작품이 삭제되었습니다.");
   }
 
   async function toggleFavorite(artworkId: string) {
@@ -274,7 +357,10 @@ function App() {
             artworks={artworks}
             favoriteIds={favoriteIds}
             isLoading={isLoadingArtworks}
+            user={user}
             onOpenAuth={openAuth}
+            onOpenCreate={openArtworkModal}
+            onDeleteArtwork={handleDeleteArtwork}
             onToggleFavorite={toggleFavorite}
           />
         )}
@@ -289,8 +375,31 @@ function App() {
           onAuthSuccess={() => setIsAuthOpen(false)}
         />
       )}
+      {isArtworkModalOpen && (
+        <ArtworkModal
+          onClose={() => setIsArtworkModalOpen(false)}
+          onCreate={handleCreateArtwork}
+        />
+      )}
     </>
   );
+}
+
+async function ensureProfile(user: User) {
+  if (!supabase) {
+    return;
+  }
+
+  const displayName =
+    typeof user.user_metadata.display_name === "string" && user.user_metadata.display_name
+      ? user.user_metadata.display_name
+      : user.email?.split("@")[0] || "Artist";
+
+  await supabase.from("profiles").upsert({
+    id: user.id,
+    display_name: displayName,
+    role: "artist",
+  });
 }
 
 function mapArtworkRow(row: ArtworkRow): Artwork {
@@ -364,7 +473,8 @@ type HomePageProps = {
 };
 
 function HomePage({ artworks, onNavigate, onOpenAuth }: HomePageProps) {
-  const [main, side] = artworks.length >= 2 ? artworks : fallbackArtworks;
+  const displayArtworks = artworks.length >= 2 ? artworks : fallbackArtworks;
+  const [main, side] = displayArtworks;
 
   return (
     <section className="page active" aria-labelledby="home-title">
@@ -393,7 +503,7 @@ function HomePage({ artworks, onNavigate, onOpenAuth }: HomePageProps) {
 
       <section className="home-band" aria-label="서비스 요약">
         <div>
-          <strong>{artworks.length.toLocaleString("ko-KR")}+</strong>
+          <strong>{Math.max(artworks.length, fallbackArtworks.length).toLocaleString("ko-KR")}+</strong>
           <span>등록 작품</span>
         </div>
         <div>
@@ -432,14 +542,27 @@ type MarketPageProps = {
   artworks: Artwork[];
   favoriteIds: Set<string>;
   isLoading: boolean;
+  user: User | null;
   onOpenAuth: AuthHandler;
+  onOpenCreate: () => void;
+  onDeleteArtwork: (artworkId: string) => void;
   onToggleFavorite: (artworkId: string) => void;
 };
 
-function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavorite }: MarketPageProps) {
+function MarketPage({
+  artworks,
+  favoriteIds,
+  isLoading,
+  user,
+  onOpenAuth,
+  onOpenCreate,
+  onDeleteArtwork,
+  onToggleFavorite,
+}: MarketPageProps) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"전체" | Category>("전체");
   const [priceRange, setPriceRange] = useState<PriceRange>("전체 가격");
+  const [marketView, setMarketView] = useState<MarketView>("all");
 
   const filteredArtworks = useMemo(() => {
     return artworks.filter((artwork) => {
@@ -454,10 +577,14 @@ function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavo
         (priceRange === "30만원 이하" && artwork.price <= 300000) ||
         (priceRange === "30만원 - 70만원" && artwork.price > 300000 && artwork.price <= 700000) ||
         (priceRange === "70만원 이상" && artwork.price > 700000);
+      const matchesView =
+        marketView === "all" ||
+        (marketView === "favorites" && favoriteIds.has(artwork.id)) ||
+        (marketView === "mine" && artwork.sellerId === user?.id);
 
-      return matchesQuery && matchesCategory && matchesPrice;
+      return matchesQuery && matchesCategory && matchesPrice && matchesView;
     });
-  }, [artworks, category, priceRange, query]);
+  }, [artworks, category, favoriteIds, marketView, priceRange, query, user?.id]);
 
   return (
     <section className="page active" aria-labelledby="market-title">
@@ -469,6 +596,25 @@ function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavo
 
       <div className="market-layout">
         <aside className="filters" aria-label="작품 필터">
+          <div className="view-tabs" aria-label="장터 보기">
+            <button className={marketView === "all" ? "active" : ""} type="button" onClick={() => setMarketView("all")}>
+              전체
+            </button>
+            <button
+              className={marketView === "favorites" ? "active" : ""}
+              type="button"
+              onClick={() => (user ? setMarketView("favorites") : onOpenAuth("login"))}
+            >
+              찜
+            </button>
+            <button
+              className={marketView === "mine" ? "active" : ""}
+              type="button"
+              onClick={() => (user ? setMarketView("mine") : onOpenAuth("login"))}
+            >
+              내 작품
+            </button>
+          </div>
           <label>
             검색
             <input
@@ -484,7 +630,7 @@ function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavo
               value={category}
               onChange={(event) => setCategory(event.target.value as "전체" | Category)}
             >
-              {categoryOptions.map((option) => (
+              {filterCategoryOptions.map((option) => (
                 <option key={option}>{option}</option>
               ))}
             </select>
@@ -500,7 +646,7 @@ function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavo
               ))}
             </select>
           </label>
-          <button className="primary-action full" type="button" onClick={() => onOpenAuth("login")}>
+          <button className="primary-action full" type="button" onClick={onOpenCreate}>
             작품 등록
           </button>
         </aside>
@@ -512,7 +658,9 @@ function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavo
               <ArtworkCard
                 artwork={artwork}
                 isFavorite={favoriteIds.has(artwork.id)}
+                isOwner={artwork.sellerId === user?.id}
                 key={artwork.id}
+                onDeleteArtwork={onDeleteArtwork}
                 onToggleFavorite={onToggleFavorite}
               />
             ))}
@@ -528,10 +676,12 @@ function MarketPage({ artworks, favoriteIds, isLoading, onOpenAuth, onToggleFavo
 type ArtworkCardProps = {
   artwork: Artwork;
   isFavorite: boolean;
+  isOwner: boolean;
+  onDeleteArtwork: (artworkId: string) => void;
   onToggleFavorite: (artworkId: string) => void;
 };
 
-function ArtworkCard({ artwork, isFavorite, onToggleFavorite }: ArtworkCardProps) {
+function ArtworkCard({ artwork, isFavorite, isOwner, onDeleteArtwork, onToggleFavorite }: ArtworkCardProps) {
   return (
     <article className="art-card">
       <div className="art-image-wrap">
@@ -550,6 +700,11 @@ function ArtworkCard({ artwork, isFavorite, onToggleFavorite }: ArtworkCardProps
         <h3>{artwork.title}</h3>
         <p>{artwork.artist}</p>
         <strong>{currency.format(artwork.price)}</strong>
+        {isOwner && (
+          <button className="text-danger" type="button" onClick={() => onDeleteArtwork(artwork.id)}>
+            삭제
+          </button>
+        )}
       </div>
     </article>
   );
@@ -790,6 +945,105 @@ function SignupForm({ onAuthSuccess }: AuthFormProps) {
         {isSubmitting ? "가입 중" : "가입하기"}
       </button>
     </form>
+  );
+}
+
+type ArtworkModalProps = {
+  onClose: () => void;
+  onCreate: (values: ArtworkFormValues) => Promise<void>;
+};
+
+function ArtworkModal({ onClose, onCreate }: ArtworkModalProps) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState<Category>("회화");
+  const [price, setPrice] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const numericPrice = Number(price);
+
+    if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+      setMessage("가격을 올바르게 입력해주세요.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setMessage(null);
+
+    try {
+      await onCreate({
+        title,
+        description,
+        category,
+        price: Math.round(numericPrice),
+        imageFile,
+      });
+      onClose();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "작품을 등록하지 못했습니다.";
+      setMessage(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="modal open" aria-hidden="false">
+      <button className="modal-backdrop" type="button" onClick={onClose} aria-label="닫기" />
+      <section className="auth-panel wide-panel" role="dialog" aria-modal="true" aria-labelledby="artwork-title">
+        <button className="close-button" type="button" onClick={onClose} aria-label="닫기">
+          ×
+        </button>
+        <form className="auth-form active" onSubmit={handleSubmit}>
+          <h2 id="artwork-title">작품 등록</h2>
+          <label>
+            작품명
+            <input value={title} onChange={(event) => setTitle(event.target.value)} required />
+          </label>
+          <label>
+            설명
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} />
+          </label>
+          <label>
+            카테고리
+            <select value={category} onChange={(event) => setCategory(event.target.value as Category)}>
+              {categoryOptions.map((option) => (
+                <option key={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            가격
+            <input
+              type="number"
+              min="0"
+              step="1000"
+              placeholder="480000"
+              value={price}
+              onChange={(event) => setPrice(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            대표 이미지
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/svg+xml"
+              onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          {message && <p className="form-message">{message}</p>}
+          <button className="primary-action full" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? "등록 중" : "등록하기"}
+          </button>
+        </form>
+      </section>
+    </div>
   );
 }
 
